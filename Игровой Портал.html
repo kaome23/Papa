@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мульти-Игровой Портал</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f7ff',
+                            100: '#e0effe',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            900: '#1e3a8a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Кастомные стили и анимации */
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .game-card {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .game-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px -10px rgba(59, 130, 246, 0.5);
+        }
+        /* Анимация вращения барабана Поле Чудес */
+        #wheel-canvas {
+            transition: transform 4s cubic-bezier(0.15, 0.99, 0.15, 0.99);
+        }
+        /* Memory card flip effect */
+        .memory-card {
+            perspective: 1000px;
+        }
+        .memory-card-inner {
+            transition: transform 0.6s;
+            transform-style: preserve-3d;
+        }
+        .memory-card.flipped .memory-card-inner {
+            transform: rotateY(180deg);
+        }
+        .memory-front, .memory-back {
+            backface-visibility: hidden;
+        }
+        .memory-back {
+            transform: rotateY(180deg);
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between selection:bg-brand-500 selection:text-white">
+
+    <!-- Звуковые эффекты на базе Web Audio API -->
+    <script>
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioCtx();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            toggleMute() {
+                this.muted = !this.muted;
+                return this.muted;
+            }
+
+            // Звук обычного клика / кнопки
+            playClick() {
+                if (this.muted) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(200, this.ctx.currentTime + 0.05);
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.05);
+            }
+
+            // Звук правильного ответа / успеха
+            playSuccess() {
+                if (this.muted) return;
+                this.init();
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                
+                osc.frequency.setValueAtTime(523.25, now); // C5
+                osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
+                osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
+                osc.frequency.setValueAtTime(1046.50, now + 0.24); // C6
+
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.5);
+            }
+
+            // Звук ошибки / проигрыша
+            playError() {
+                if (this.muted) return;
+                this.init();
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                
+                osc.frequency.setValueAtTime(180, now);
+                osc.frequency.linearRampToValueAtTime(110, now + 0.25);
+
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.3);
+            }
+
+            // Звук вращения (щелчки колеса)
+            playTick() {
+                if (this.muted) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+                gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.03);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.03);
+            }
+
+            // Торжественный фанфар при победе
+            playWin() {
+                if (this.muted) return;
+                this.init();
+                const notes = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99];
+                notes.forEach((freq, index) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    const now = this.ctx.currentTime + index * 0.1;
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.4);
+                });
+            }
+
+            // Переворот карты
+            playFlip() {
+                if (this.muted) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, this.ctx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            }
+        }
+
+        const sound = new SoundEngine();
+    </script>
+
+    <!-- НАВБАР / ШАПКА -->
+    <header class="sticky top-0 z-50 glass border-b border-slate-800 px-4 lg:px-8 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3 cursor-pointer" onclick="showMenu()">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-brand-500/30">
+                <i class="fa-solid font-black fa-gamepad"></i>
+            </div>
+            <div>
+                <h1 class="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">ИгровойПортал</h1>
+                <p class="text-xs text-slate-400">7 лучших игр в одном месте</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <button onclick="sound.playClick(); showMenu();" id="btn-home" class="hidden px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold transition flex items-center gap-2 border border-slate-700">
+                <i class="fa-solid fa-house"></i> Меню игр
+            </button>
+            <button onclick="toggleAudio()" id="btn-audio" class="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition flex items-center justify-center border border-slate-700">
+                <i class="fa-solid fa-volume-high" id="audio-icon"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- ОСНОВНОЙ КОНТЕЙНЕР -->
+    <main class="flex-grow container mx-auto px-4 py-8 max-w-6xl">
+
+        <!-- ГЛАВНОЕ МЕНЮ ИГР -->
+        <div id="view-menu" class="space-y-6">
+            <div class="text-center space-y-2 mb-8">
+                <h2 class="text-3xl md:text-5xl font-black bg-gradient-to-r from-blue-400 via-indigo-300 to-purple-500 bg-clip-text text-transparent"> Выберите Игру </h2>
+                <p class="text-slate-400 max-w-md mx-auto">Интерактивные развлечения с качественной озвучкой и стильным дизайном</p>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Карта: Судоку -->
+                <div onclick="startGame('sudoku')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-brand-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-table-cells"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-brand-400 transition">Судоку</h3>
+                            <p class="text-sm text-slate-400 mt-1">Классическая головоломка с числами. Развивайте логику и мышление.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-brand-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Угадай число -->
+                <div onclick="startGame('guess')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-emerald-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-arrow-up-1-9"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-emerald-400 transition">Угадай Число</h3>
+                            <p class="text-sm text-slate-400 mt-1">Отгадайте загаданное компьютером число за минимальное число попыток.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-emerald-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Поле Чудес -->
+                <div onclick="startGame('wheel')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-amber-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-dharmachakra"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-amber-400 transition">Поле Чудес</h3>
+                            <p class="text-sm text-slate-400 mt-1">Крутите барабан, зарабатывайте очки и отгадывайте зашифрованные слова.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-amber-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Викторина -->
+                <div onclick="startGame('quiz')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-purple-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-lightbulb"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-purple-400 transition">Викторина</h3>
+                            <p class="text-sm text-slate-400 mt-1">Проверьте эрудицию в ответе на вопросы из разных областей знаний.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-purple-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Найди Совпадения (Memory) -->
+                <div onclick="startGame('memory')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-pink-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-pink-500/10 border border-pink-500/30 text-pink-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-clone"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-pink-400 transition">Найди Пару</h3>
+                            <p class="text-sm text-slate-400 mt-1">Тренируйте зрительную память, открывая карточки с одинаковыми эмодзи.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-pink-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Кто хочет стать миллионером -->
+                <div onclick="startGame('millionaire')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-indigo-500/50">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-sack-dollar"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-indigo-400 transition">Миллионер</h3>
+                            <p class="text-sm text-slate-400 mt-1">15 вопросов к вершине! Подсказки, несгораемые суммы и суперприз.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-indigo-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+                <!-- Карта: Своя Игра -->
+                <div onclick="startGame('jeopardy')" class="game-card glass rounded-2xl p-6 cursor-pointer flex flex-col justify-between group border border-slate-800 hover:border-cyan-500/50 sm:col-span-2 lg:col-span-1">
+                    <div class="space-y-4">
+                        <div class="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center text-2xl group-hover:scale-110 transition duration-300">
+                            <i class="fa-solid fa-cubes-stacked"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-slate-100 group-hover:text-cyan-400 transition">Своя Игра</h3>
+                            <p class="text-sm text-slate-400 mt-1">Выбирайте категории и номинал вопросов на интерактивном табло.</p>
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-between text-xs font-semibold text-cyan-400">
+                        <span>Играть сейчас</span>
+                        <i class="fa-solid fa-arrow-right group-hover:translate-x-1 transition"></i>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- 1. ИГРА: СУДОКУ -->
+        <div id="game-sudoku" class="hidden max-w-xl mx-auto space-y-6">
+            <div class="flex items-center justify-between glass p-4 rounded-2xl">
+                <div>
+                    <h2 class="text-2xl font-bold text-blue-400">Судоку</h2>
+                    <p class="text-xs text-slate-400">Заполните сетку числами от 1 до 9</p>
+                </div>
+                <button onclick="sound.playClick(); initSudoku();" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold transition">
+                    Новая игра
+                </button>
+            </div>
+
+            <div id="sudoku-grid" class="grid grid-cols-9 gap-1 bg-slate-800 p-2 rounded-2xl border border-slate-700 shadow-2xl">
+                <!-- Клетки генерируются через JS -->
+            </div>
+
+            <div class="flex justify-center gap-2">
+                <!-- Селектор чисел для ввода -->
+                <script>
+                    for(let i=1; i<=9; i++) {
+                        document.write(`<button onclick="sound.playClick(); selectSudokuNumber(${i})" class="w-10 h-10 rounded-xl bg-slate-800 hover:bg-brand-600 border border-slate-700 font-bold text-lg text-white transition">${i}</button>`);
+                    }
+                </script>
+                <button onclick="sound.playClick(); selectSudokuNumber(0)" class="w-10 h-10 rounded-xl bg-red-900/50 hover:bg-red-600 border border-red-700 font-bold text-lg text-white transition">
+                    <i class="fa-solid fa-eraser"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. ИГРА: УГАДАЙ ЧИСЛО -->
+        <div id="game-guess" class="hidden max-w-lg mx-auto space-y-6">
+            <div class="text-center space-y-2">
+                <h2 class="text-3xl font-extrabold text-emerald-400">Угадай Число</h2>
+                <p class="text-slate-400">Я загадал число от <span class="text-emerald-300 font-bold">1 до 100</span>. Попробуй отгадать!</p>
+            </div>
+
+            <div class="glass p-8 rounded-3xl border border-slate-800 text-center space-y-6">
+                <div id="guess-feedback" class="text-lg font-medium text-slate-300 min-h-[3rem] flex items-center justify-center">
+                    Введи число и нажми проверить!
+                </div>
+
+                <div class="flex gap-3 justify-center">
+                    <input type="number" id="guess-input" min="1" max="100" class="w-32 text-center text-2xl font-bold bg-slate-900 border border-slate-700 rounded-xl focus:border-emerald-500 focus:outline-none p-3 text-white" placeholder="?">
+                    <button onclick="makeGuess()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 font-bold rounded-xl text-white transition shadow-lg shadow-emerald-600/30">
+                        Проверить
+                    </button>
+                </div>
+
+                <div class="flex justify-between items-center pt-4 border-t border-slate-800 text-sm text-slate-400">
+                    <span>Попыток: <strong id="guess-attempts" class="text-emerald-400">0</strong></span>
+                    <button onclick="sound.playClick(); resetGuessGame()" class="text-xs hover:text-white transition">Сбросить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. ИГРА: ПОЛЕ ЧУДЕС -->
+        <div id="game-wheel" class="hidden max-w-2xl mx-auto space-y-6">
+            <div class="text-center space-y-2">
+                <h2 class="text-3xl font-extrabold text-amber-400">Поле Чудес</h2>
+                <p id="wheel-hint" class="text-slate-300 font-medium">Тема: ???</p>
+            </div>
+
+            <!-- Зашифрованное слово -->
+            <div id="wheel-word-container" class="flex justify-center gap-2 my-6">
+                <!-- Буквы слова -->
+            </div>
+
+            <!-- Барабан и интерфейс -->
+            <div class="glass p-6 rounded-3xl border border-slate-800 flex flex-col items-center gap-6">
+                <div class="relative w-64 h-64 flex items-center justify-center">
+                    <!-- Указатель -->
+                    <div class="absolute -top-3 z-10 text-amber-400 text-3xl">
+                        <i class="fa-solid fa-caret-down"></i>
+                    </div>
+                    <canvas id="wheel-canvas" width="256" height="256" class="rounded-full shadow-2xl border-4 border-amber-500/40"></canvas>
+                </div>
+
+                <div id="wheel-status" class="text-center font-bold text-lg text-amber-300 min-h-[2rem]">
+                    Крутите барабан!
+                </div>
+
+                <button id="btn-spin" onclick="spinWheel()" class="px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black text-lg rounded-2xl shadow-lg shadow-amber-500/20 transition transform active:scale-95">
+                    ВРАЩАТЬ БАРАБАН
+                </button>
+
+                <!-- Алфавит -->
+                <div id="wheel-letters" class="flex flex-wrap gap-1.5 justify-center max-w-md pt-4 border-t border-slate-800 pointer-events-none opacity-50">
+                    <!-- Буквы генерируются через JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. ИГРА: ВИКТОРИНА -->
+        <div id="game-quiz" class="hidden max-w-2xl mx-auto space-y-6">
+            <div class="flex justify-between items-center glass p-4 rounded-2xl">
+                <span class="text-sm font-semibold text-purple-400">Вопрос <span id="quiz-current">1</span> из 5</span>
+                <span class="text-sm font-bold text-slate-300">Счет: <span id="quiz-score" class="text-purple-400">0</span></span>
+            </div>
+
+            <div class="glass p-8 rounded-3xl border border-slate-800 space-y-6">
+                <h3 id="quiz-question" class="text-xl md:text-2xl font-bold text-slate-100">
+                    Загрузка вопроса...
+                </h3>
+
+                <div id="quiz-options" class="grid grid-cols-1 gap-3">
+                    <!-- Варианты ответов -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. ИГРА: НАЙДИ ПАРУ (MEMORY) -->
+        <div id="game-memory" class="hidden max-w-xl mx-auto space-y-6">
+            <div class="flex justify-between items-center glass p-4 rounded-2xl">
+                <div>
+                    <h2 class="text-2xl font-bold text-pink-400">Найди Пару</h2>
+                    <p class="text-xs text-slate-400">Найдите все совпадающие карточки</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-slate-400">Ходы: <span id="memory-moves" class="text-white font-bold">0</span></div>
+                    <button onclick="sound.playClick(); initMemoryGame();" class="mt-1 text-xs text-pink-400 hover:underline">Перезапустить</button>
+                </div>
+            </div>
+
+            <div id="memory-board" class="grid grid-cols-4 gap-3">
+                <!-- Карточки генерируются JS -->
+            </div>
+        </div>
+
+        <!-- 6. ИГРА: КТО ХОЧЕТ СТАТЬ МИЛЛИОНЕРОМ -->
+        <div id="game-millionaire" class="hidden max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Вопрос и ответы -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="glass p-6 rounded-3xl border border-slate-800 space-y-4">
+                    <!-- Подсказки -->
+                    <div class="flex gap-3 justify-center pb-4 border-b border-slate-800">
+                        <button id="lifeline-5050" onclick="useLifeline('5050')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-bold text-indigo-400 transition">50:50</button>
+                        <button id="lifeline-hall" onclick="useLifeline('hall')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-bold text-indigo-400 transition"><i class="fa-solid fa-users"></i> Помощь зала</button>
+                    </div>
+
+                    <div id="mill-question" class="min-h-[5rem] flex items-center justify-center text-center font-bold text-lg text-slate-100">
+                        Вопрос...
+                    </div>
+                </div>
+
+                <div id="mill-options" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <!-- 4 варианта -->
+                </div>
+            </div>
+
+            <!-- Лестница призов -->
+            <div class="glass p-4 rounded-3xl border border-slate-800 flex flex-col justify-between">
+                <h3 class="font-bold text-center text-indigo-400 text-sm mb-2">Дерево призов</h3>
+                <div id="mill-ladder" class="flex flex-col-reverse gap-1 text-xs font-semibold">
+                    <!-- Лестница генерируется JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 7. ИГРА: СВОЯ ИГРА -->
+        <div id="game-jeopardy" class="hidden max-w-4xl mx-auto space-y-6">
+            <div class="flex justify-between items-center glass p-4 rounded-2xl">
+                <h2 class="text-2xl font-bold text-cyan-400">Своя Игра</h2>
+                <div class="text-lg font-bold">Счет: <span id="jeopardy-score" class="text-cyan-400">0</span></div>
+            </div>
+
+            <div id="jeopardy-board" class="grid grid-cols-4 gap-2 glass p-4 rounded-3xl border border-slate-800">
+                <!-- Табло вопросов -->
+            </div>
+
+            <!-- Модальное окно для вопроса Своей игры -->
+            <div id="jeopardy-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+                <div class="glass p-6 md:p-8 rounded-3xl border border-slate-700 max-w-xl w-full space-y-6 text-center">
+                    <div id="jeopardy-modal-cat" class="text-xs font-bold text-cyan-400 tracking-widest uppercase">Категория</div>
+                    <div id="jeopardy-modal-q" class="text-xl font-bold text-white">Текст вопроса?</div>
+                    <div id="jeopardy-modal-opts" class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4">
+                        <!-- Ответы -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ПОДВАЛ -->
+    <footer class="border-t border-slate-900 glass py-4 text-center text-xs text-slate-500">
+        <p>© 2026 Мульти-Игровой Портал | Озвучка Web Audio API</p>
+    </footer>
+
+    <!-- ЛОГИКА ИГР -->
+    <script>
+        // Переключение режимов отображения
+        function showMenu() {
+            document.querySelectorAll('main > div').forEach(div => div.classList.add('hidden'));
+            document.getElementById('view-menu').classList.remove('hidden');
+            document.getElementById('btn-home').classList.add('hidden');
+        }
+
+        function startGame(gameId) {
+            sound.playClick();
+            document.querySelectorAll('main > div').forEach(div => div.classList.add('hidden'));
+            document.getElementById(`game-${gameId}`).classList.remove('hidden');
+            document.getElementById('btn-home').classList.remove('hidden');
+
+            // Инициализация выбранной игры
+            if (gameId === 'sudoku') initSudoku();
+            if (gameId === 'guess') resetGuessGame();
+            if (gameId === 'wheel') initWheelGame();
+            if (gameId === 'quiz') initQuizGame();
+            if (gameId === 'memory') initMemoryGame();
+            if (gameId === 'millionaire') initMillionaireGame();
+            if (gameId === 'jeopardy') initJeopardyGame();
+        }
+
+        function toggleAudio() {
+            const isMuted = sound.toggleMute();
+            const icon = document.getElementById('audio-icon');
+            if (isMuted) {
+                icon.className = 'fa-solid fa-volume-xmark text-red-400';
+            } else {
+                icon.className = 'fa-solid fa-volume-high text-emerald-400';
+                sound.playClick();
+            }
+        }
+
+        /* -------------------------------------------------------------
+           1. СУДОКУ (SUDOKU)
+        ------------------------------------------------------------- */
+        let sudokuSelectedCell = null;
+        const sudokuInitial = [
+            [5,3,0,0,7,0,0,0,0],
+            [6,0,0,1,9,5,0,0,0],
+            [0,9,8,0,0,0,0,6,0],
+            [8,0,0,0,6,0,0,0,3],
+            [4,0,0,8,0,3,0,0,1],
+            [7,0,0,0,2,0,0,0,6],
+            [0,6,0,0,0,0,2,8,0],
+            [0,0,0,4,1,9,0,0,5],
+            [0,0,0,0,8,0,0,7,9]
+        ];
+        let sudokuState = [];
+
+        function initSudoku() {
+            const grid = document.getElementById('sudoku-grid');
+            grid.innerHTML = '';
+            sudokuState = JSON.parse(JSON.stringify(sudokuInitial));
+            sudokuSelectedCell = null;
+
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    const cell = document.createElement('div');
+                    const val = sudokuState[r][c];
+                    cell.className = `w-full aspect-square flex items-center justify-center font-bold text-lg rounded-lg cursor-pointer transition select-none ${
+                        val !== 0 ? 'bg-slate-700 text-brand-400' : 'bg-slate-900 hover:bg-slate-800 text-white'
+                    }`;
+                    if ((Math.floor(r/3) + Math.floor(c/3)) % 2 === 0) {
+                        cell.classList.add('border', 'border-slate-700/50');
+                    }
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    cell.textContent = val !== 0 ? val : '';
+                    cell.onclick = () => {
+                        sound.playClick();
+                        document.querySelectorAll('#sudoku-grid > div').forEach(el => el.classList.remove('ring-2', 'ring-brand-500'));
+                        if (sudokuInitial[r][c] === 0) {
+                            cell.classList.add('ring-2', 'ring-brand-500');
+                            sudokuSelectedCell = { r, c, element: cell };
+                        }
+                    };
+                    grid.appendChild(cell);
+                }
+            }
+        }
+
+        function selectSudokuNumber(num) {
+            if (!sudokuSelectedCell) return;
+            const { r, c, element } = sudokuSelectedCell;
+            sudokuState[r][c] = num;
+            element.textContent = num !== 0 ? num : '';
+            element.classList.add('text-indigo-300');
+        }
+
+        /* -------------------------------------------------------------
+           2. УГАДАЙ ЧИСЛО
+        ------------------------------------------------------------- */
+        let guessSecret = 0;
+        let guessAttempts = 0;
+
+        function resetGuessGame() {
+            guessSecret = Math.floor(Math.random() * 100) + 1;
+            guessAttempts = 0;
+            document.getElementById('guess-attempts').textContent = '0';
+            document.getElementById('guess-feedback').textContent = 'Я загадал новое число от 1 до 100!';
+            document.getElementById('guess-input').value = '';
+        }
+
+        function makeGuess() {
+            const input = document.getElementById('guess-input');
+            const val = parseInt(input.value);
+            const feedback = document.getElementById('guess-feedback');
+
+            if (isNaN(val) || val < 1 || val > 100) {
+                sound.playError();
+                feedback.textContent = 'Пожалуйста, введите число от 1 до 100!';
+                return;
+            }
+
+            guessAttempts++;
+            document.getElementById('guess-attempts').textContent = guessAttempts;
+
+            if (val === guessSecret) {
+                sound.playWin();
+                feedback.innerHTML = `<span class="text-emerald-400 font-bold text-xl">🎉 Поздравляем! Вы угадали число ${guessSecret} за ${guessAttempts} попыток!</span>`;
+            } else if (val < guessSecret) {
+                sound.playError();
+                feedback.textContent = '📉 Загаданное число БОЛЬШЕ!';
+            } else {
+                sound.playError();
+                feedback.textContent = '📈 Загаданное число МЕНЬШЕ!';
+            }
+            input.value = '';
+        }
+
+        /* -------------------------------------------------------------
+           3. ПОЛЕ ЧУДЕС
+        ------------------------------------------------------------- */
+        const wheelWords = [
+            { word: "ПРОГРАММИРОВАНИЕ", hint: "Процесс создания компьютерных программ" },
+            { word: "АЛГОРИТМ", hint: "Четкая последовательность действий" },
+            { word: "ИНТЕРНЕТ", hint: "Глобальная компьютерная сеть" }
+        ];
+        let wheelCurrent = null;
+        let wheelGuessed = [];
+        let wheelRotation = 0;
+        let isSpinning = false;
+        const wheelSectors = [100, 200, 300, 500, 'БАНКРОТ', 750, 1000, 'ПРИЗ'];
+
+        function initWheelGame() {
+            wheelCurrent = wheelWords[Math.floor(Math.random() * wheelWords.length)];
+            wheelGuessed = [];
+            document.getElementById('wheel-hint').textContent = `Тема: ${wheelCurrent.hint}`;
+            
+            // Зашифрованные буквы
+            const container = document.getElementById('wheel-word-container');
+            container.innerHTML = '';
+            for (let char of wheelCurrent.word) {
+                const box = document.createElement('div');
+                box.className = 'w-10 h-12 bg-slate-800 border-2 border-amber-500/50 rounded-lg flex items-center justify-center font-black text-xl text-amber-300 shadow-md';
+                box.dataset.char = char;
+                box.textContent = '_';
+                container.appendChild(box);
+            }
+
+            // Алфавит
+            const lettersDiv = document.getElementById('wheel-letters');
+            lettersDiv.innerHTML = '';
+            const alphabet = "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ";
+            for (let char of alphabet) {
+                const btn = document.createElement('button');
+                btn.className = 'w-8 h-8 rounded-lg bg-slate-800 hover:bg-amber-600 border border-slate-700 font-bold text-xs text-white transition';
+                btn.textContent = char;
+                btn.onclick = () => guessWheelLetter(char, btn);
+                lettersDiv.appendChild(btn);
+            }
+
+            drawWheel();
+        }
+
+        function drawWheel() {
+            const canvas = document.getElementById('wheel-canvas');
+            const ctx = canvas.getContext('2d');
+            const numSectors = wheelSectors.length;
+            const arc = (2 * Math.PI) / numSectors;
+
+            ctx.clearRect(0, 0, 256, 256);
+            for (let i = 0; i < numSectors; i++) {
+                const angle = i * arc;
+                ctx.beginPath();
+                ctx.fillStyle = i % 2 === 0 ? '#1e293b' : '#334155';
+                ctx.moveTo(128, 128);
+                ctx.arc(128, 128, 120, angle, angle + arc);
+                ctx.lineTo(128, 128);
+                ctx.fill();
+                ctx.strokeStyle = '#f59e0b';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.save();
+                ctx.translate(128, 128);
+                ctx.rotate(angle + arc / 2);
+                ctx.textAlign = "right";
+                ctx.fillStyle = "#fbbf24";
+                ctx.font = "bold 14px Inter";
+                ctx.fillText(wheelSectors[i], 110, 5);
+                ctx.restore();
+            }
+        }
+
+        function spinWheel() {
+            if (isSpinning) return;
+            isSpinning = true;
+            sound.playClick();
+            
+            const btnSpin = document.getElementById('btn-spin');
+            btnSpin.disabled = true;
+
+            const extraDegrees = Math.floor(Math.random() * 360) + 1440; // Минимум 4 оборота
+            wheelRotation += extraDegrees;
+            
+            const canvas = document.getElementById('wheel-canvas');
+            canvas.style.transform = `rotate(${wheelRotation}deg)`;
+
+            let ticks = 0;
+            const interval = setInterval(() => {
+                sound.playTick();
+                ticks++;
+                if (ticks > 20) clearInterval(interval);
+            }, 150);
+
+            setTimeout(() => {
+                isSpinning = false;
+                btnSpin.disabled = false;
+                const sectorIndex = Math.floor((360 - (wheelRotation % 360)) / (360 / wheelSectors.length)) % wheelSectors.length;
+                const result = wheelSectors[sectorIndex];
+                
+                document.getElementById('wheel-status').textContent = `Сектор: ${result}! Выберите букву!`;
+                document.getElementById('wheel-letters').classList.remove('pointer-events-none', 'opacity-50');
+            }, 4000);
+        }
+
+        function guessWheelLetter(char, btn) {
+            btn.disabled = true;
+            btn.classList.add('opacity-30', 'bg-slate-900');
+            document.getElementById('wheel-letters').classList.add('pointer-events-none', 'opacity-50');
+
+            if (wheelCurrent.word.includes(char)) {
+                sound.playSuccess();
+                wheelGuessed.push(char);
+                
+                let win = true;
+                document.querySelectorAll('#wheel-word-container > div').forEach(box => {
+                    if (box.dataset.char === char) {
+                        box.textContent = char;
+                    }
+                    if (box.textContent === '_') win = false;
+                });
+
+                if (win) {
+                    sound.playWin();
+                    document.getElementById('wheel-status').textContent = "🎉 ВЫ ПОБЕДИЛИ В ПОЛЕ ЧУДЕС!";
+                } else {
+                    document.getElementById('wheel-status').textContent = "Правильно! Вращайте барабан снова!";
+                }
+            } else {
+                sound.playError();
+                document.getElementById('wheel-status').textContent = "Такой буквы нет! Вращайте барабан!";
+            }
+        }
+
+        /* -------------------------------------------------------------
+           4. ВИКТОРИНА
+        ------------------------------------------------------------- */
+        const quizData = [
+            { q: "Какая планета самая большая в Солнечной системе?", opts: ["Марс", "Юпитер", "Сатурн", "Венера"], a: 1 },
+            { q: "Сколько хромосом у человека?", opts: ["42", "44", "46", "48"], a: 2 },
+            { q: "Кто написал роман «Война и мир»?", opts: ["Достоевский", "Толстой", "Пушкин", "Чехов"], a: 1 },
+            { q: "Столица Франции?", opts: ["Лондон", "Берлин", "Париж", "Мадрид"], a: 2 },
+            { q: "Какое вещество имеет химическую формулу H2O?", opts: ["Водород", "Кислород", "Соль", "Вода"], a: 3 }
+        ];
+        let quizIndex = 0;
+        let quizScore = 0;
+
+        function initQuizGame() {
+            quizIndex = 0;
+            quizScore = 0;
+            renderQuizQuestion();
+        }
+
+        function renderQuizQuestion() {
+            document.getElementById('quiz-current').textContent = quizIndex + 1;
+            document.getElementById('quiz-score').textContent = quizScore;
+            
+            const q = quizData[quizIndex];
+            document.getElementById('quiz-question').textContent = q.q;
+
+            const optsDiv = document.getElementById('quiz-options');
+            optsDiv.innerHTML = '';
+            q.opts.forEach((opt, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'p-4 rounded-xl bg-slate-800 hover:bg-purple-600/30 border border-slate-700 text-left font-semibold text-slate-200 transition';
+                btn.textContent = opt;
+                btn.onclick = () => {
+                    if (idx === q.a) {
+                        sound.playSuccess();
+                        quizScore += 100;
+                    } else {
+                        sound.playError();
+                    }
+                    quizIndex++;
+                    if (quizIndex < quizData.length) {
+                        renderQuizQuestion();
+                    } else {
+                        sound.playWin();
+                        document.getElementById('quiz-question').textContent = `Викторина окончена! Ваш итоговый счет: ${quizScore}`;
+                        optsDiv.innerHTML = '';
+                    }
+                };
+                optsDiv.appendChild(btn);
+            });
+        }
+
+        /* -------------------------------------------------------------
+           5. НАЙДИ ПАРУ (MEMORY GAME)
+        ------------------------------------------------------------- */
+        const memoryEmojis = ['🐶', '🐱', '🦊', '🦁', '🐸', '🐵', '🦄', '🐼'];
+        let memoryCards = [];
+        let memoryFlipped = [];
+        let memoryMoves = 0;
+
+        function initMemoryGame() {
+            const board = document.getElementById('memory-board');
+            board.innerHTML = '';
+            memoryMoves = 0;
+            document.getElementById('memory-moves').textContent = '0';
+            
+            const deck = [...memoryEmojis, ...memoryEmojis].sort(() => Math.random() - 0.5);
+            memoryCards = [];
+            memoryFlipped = [];
+
+            deck.forEach((emoji, idx) => {
+                const card = document.createElement('div');
+                card.className = 'memory-card h-24 cursor-pointer';
+                card.innerHTML = `
+                    <div class="memory-card-inner relative w-full h-full rounded-2xl shadow-md">
+                        <div class="memory-front absolute inset-0 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center text-2xl font-bold text-slate-500">?</div>
+                        <div class="memory-back absolute inset-0 bg-pink-950/40 border-2 border-pink-500 rounded-2xl flex items-center justify-center text-4xl">${emoji}</div>
+                    </div>
+                `;
+                card.onclick = () => flipMemoryCard(card, emoji);
+                board.appendChild(card);
+            });
+        }
+
+        function flipMemoryCard(card, emoji) {
+            if (card.classList.contains('flipped') || memoryFlipped.length === 2) return;
+
+            sound.playFlip();
+            card.classList.add('flipped');
+            memoryFlipped.push({ card, emoji });
+
+            if (memoryFlipped.length === 2) {
+                memoryMoves++;
+                document.getElementById('memory-moves').textContent = memoryMoves;
+                
+                const [first, second] = memoryFlipped;
+                if (first.emoji === second.emoji) {
+                    sound.playSuccess();
+                    memoryFlipped = [];
+                    // Проверка победы
+                    if (document.querySelectorAll('.memory-card.flipped').length === 16) {
+                        setTimeout(() => sound.playWin(), 300);
+                    }
+                } else {
+                    setTimeout(() => {
+                        sound.playError();
+                        first.card.classList.remove('flipped');
+                        second.card.classList.remove('flipped');
+                        memoryFlipped = [];
+                    }, 1000);
+                }
+            }
+        }
+
+        /* -------------------------------------------------------------
+           6. КТО ХОЧЕТ СТАТЬ МИЛЛИОНЕРОМ
+        ------------------------------------------------------------- */
+        const millLadder = [
+            "500 ₽", "1 000 ₽", "2 000 ₽", "3 000 ₽", "5 000 ₽ (Несгораемая)",
+            "10 000 ₽", "15 000 ₽", "25 000 ₽", "50 000 ₽", "100 000 ₽ (Несгораемая)",
+            "200 000 ₽", "400 000 ₽", "800 000 ₽", "1 500 000 ₽", "3 000 000 ₽"
+        ];
+        const millQuestions = [
+            { q: "Как называется столица России?", opts: ["Санкт-Петербург", "Москва", "Казань", "Сочи"], a: 1 },
+            { q: "Что не является языком программирования?", opts: ["Python", "HTML", "C++", "Java"], a: 1 },
+            { q: "Сколько планет в Солнечной системе?", opts: ["7", "8", "9", "10"], a: 1 },
+            { q: "Какой элемент обозначается как Au?", opts: ["Серебро", "Медь", "Золото", "Железо"], a: 2 },
+            { q: "Самый глубокий океан?", opts: ["Тихий", "Атлантический", "Индийский", "Северный Ледовитый"], a: 0 }
+        ];
+        let millIndex = 0;
+
+        function initMillionaireGame() {
+            millIndex = 0;
+            renderMillLadder();
+            renderMillQuestion();
+        }
+
+        function renderMillLadder() {
+            const container = document.getElementById('mill-ladder');
+            container.innerHTML = '';
+            millLadder.forEach((step, idx) => {
+                const item = document.createElement('div');
+                item.className = `p-1.5 rounded-lg flex justify-between px-3 ${
+                    idx === millIndex ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-900/50 text-slate-400'
+                }`;
+                item.innerHTML = `<span>${idx + 1}</span> <span>${step}</span>`;
+                container.appendChild(item);
+            });
+        }
+
+        function renderMillQuestion() {
+            const q = millQuestions[millIndex];
+            document.getElementById('mill-question').textContent = q.q;
+
+            const optsDiv = document.getElementById('mill-options');
+            optsDiv.innerHTML = '';
+            q.opts.forEach((opt, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'p-4 bg-slate-800 hover:bg-indigo-900/50 border border-slate-700 rounded-2xl text-left font-semibold text-slate-200 transition';
+                btn.textContent = `${String.fromCharCode(65 + idx)}: ${opt}`;
+                btn.onclick = () => {
+                    if (idx === q.a) {
+                        sound.playSuccess();
+                        millIndex++;
+                        if (millIndex < millQuestions.length) {
+                            renderMillLadder();
+                            renderMillQuestion();
+                        } else {
+                            sound.playWin();
+                            document.getElementById('mill-question').textContent = "🏆 ПОЗДРАВЛЯЕМ! ВЫ СТАЛИ МИЛЛИОНЕРОМ!";
+                            optsDiv.innerHTML = '';
+                        }
+                    } else {
+                        sound.playError();
+                        document.getElementById('mill-question').textContent = "❌ Неправильно! Игра окончена.";
+                        optsDiv.innerHTML = '';
+                    }
+                };
+                optsDiv.appendChild(btn);
+            });
+        }
+
+        function useLifeline(type) {
+            sound.playClick();
+            if (type === '5050') {
+                const q = millQuestions[millIndex];
+                const btns = document.querySelectorAll('#mill-options button');
+                let removed = 0;
+                btns.forEach((btn, idx) => {
+                    if (idx !== q.a && removed < 2) {
+                        btn.style.visibility = 'hidden';
+                        removed++;
+                    }
+                });
+                document.getElementById('lifeline-5050').disabled = true;
+                document.getElementById('lifeline-5050').classList.add('opacity-30');
+            } else if (type === 'hall') {
+                alert("Зал считает, что правильный ответ — вариант " + String.fromCharCode(65 + millQuestions[millIndex].a));
+                document.getElementById('lifeline-hall').disabled = true;
+                document.getElementById('lifeline-hall').classList.add('opacity-30');
+            }
+        }
+
+        /* -------------------------------------------------------------
+           7. СВОЯ ИГРА (JEOPARDY)
+        ------------------------------------------------------------- */
+        const jeopardyData = [
+            {
+                cat: "Космос",
+                q: [
+                    { pts: 100, q: "Ближайшая к Земле звезда?", opts: ["Сириус", "Солнце", "Бетельгейзе", "Вега"], a: 1 },
+                    { pts: 200, q: "Первый человек в космосе?", opts: ["Армстронг", "Гагарин", "Титов", "Гленн"], a: 1 }
+                ]
+            },
+            {
+                cat: "Кино",
+                q: [
+                    { pts: 100, q: "Кто сыграл Железного Человека?", opts: ["Крис Эванс", "Роберт Дауни мл.", "Крис Хемсворт", "Брэд Питт"], a: 1 },
+                    { pts: 200, q: "Режиссер фильма «Титаник»?", opts: ["Спилберг", "Кэмерон", "Нолан", "Тарантино"], a: 1 }
+                ]
+            }
+        ];
+        let jeopardyScore = 0;
+
+        function initJeopardyGame() {
+            jeopardyScore = 0;
+            document.getElementById('jeopardy-score').textContent = '0';
+            const board = document.getElementById('jeopardy-board');
+            board.innerHTML = '';
+
+            jeopardyData.forEach(cat => {
+                const catHeader = document.createElement('div');
+                catHeader.className = 'p-3 bg-cyan-950/40 border border-cyan-800 rounded-xl font-bold text-center text-cyan-300 text-sm flex items-center justify-center';
+                catHeader.textContent = cat.cat;
+                board.appendChild(catHeader);
+
+                cat.q.forEach(qItem => {
+                    const cell = document.createElement('button');
+                    cell.className = 'p-4 bg-slate-800 hover:bg-cyan-600 border border-slate-700 rounded-xl font-black text-xl text-amber-400 transition';
+                    cell.textContent = qItem.pts;
+                    cell.onclick = () => openJeopardyQuestion(cat.cat, qItem, cell);
+                    board.appendChild(cell);
+                });
+            });
+        }
+
+        function openJeopardyQuestion(catName, qItem, cellBtn) {
+            sound.playClick();
+            cellBtn.disabled = true;
+            cellBtn.classList.add('opacity-20');
+
+            const modal = document.getElementById('jeopardy-modal');
+            document.getElementById('jeopardy-modal-cat').textContent = catName + ` (${qItem.pts} очков)`;
+            document.getElementById('jeopardy-modal-q').textContent = qItem.q;
+
+            const optsContainer = document.getElementById('jeopardy-modal-opts');
+            optsContainer.innerHTML = '';
+
+            qItem.opts.forEach((opt, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'p-3 bg-slate-800 hover:bg-cyan-600 border border-slate-700 rounded-xl font-semibold text-white transition';
+                btn.textContent = opt;
+                btn.onclick = () => {
+                    if (idx === qItem.a) {
+                        sound.playSuccess();
+                        jeopardyScore += qItem.pts;
+                    } else {
+                        sound.playError();
+                        jeopardyScore -= qItem.pts;
+                    }
+                    document.getElementById('jeopardy-score').textContent = jeopardyScore;
+                    modal.classList.add('hidden');
+                };
+                optsContainer.appendChild(btn);
+            });
+
+            modal.classList.remove('hidden');
+        }
+
+        // Запуск при загрузке
+        window.onload = function() {
+            showMenu();
+        };
+    </script>
+</body>
+</html>
